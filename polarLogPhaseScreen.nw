@@ -57,7 +57,7 @@ noweb polarLogPhaseScreen.nw
 <<source code>>=
 nvcc -ptx plps.cu
 @ The PDF documentation is generated with
-<<documentation>>=
+<<source documentation>>=
 noweave -delay -x polarLogPhaseScreen.nw > polarLogPhaseScreen.tex
 pdflatex polarLogPhaseScreen.tex
 pdflatex polarLogPhaseScreen.tex
