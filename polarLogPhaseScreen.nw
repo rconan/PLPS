@@ -49,16 +49,15 @@ Norman Ramsey.
 
 This document describe a CUDA implementation of the polar--logarithmic method~\cite{BG13} to generate turbulence phase screens.
 The source code and documentation are generated from a single file [[polarLogPhaseScreen.nw]] using the literate programming parser [[noweb]]~\cite{noweb}.
-The source code for the CUDA kernel and the Matlab test script is generated with 
-<<source code>>=
+The source code and documentation for the CUDA kernel and the Matlab test script is generated with 
+<<source code and documentation>>=
 noweb polarLogPhaseScreen.nw
-@ This command created 2 files: [[plps.cu]] and [[plps.m]].
+@ This command created 3 files: [[plps.cu]], [[plps.m]] and [[polarLogPhaseScreen.tex]].
   In order to run the Matlab test script [[plps.m]], the CUDA kernel is first compiled with
 <<source code>>=
 nvcc -ptx plps.cu
 @ The PDF documentation is generated with
 <<source documentation>>=
-noweave -delay -x polarLogPhaseScreen.nw > polarLogPhaseScreen.tex
 pdflatex polarLogPhaseScreen.tex
 pdflatex polarLogPhaseScreen.tex
 @ 
