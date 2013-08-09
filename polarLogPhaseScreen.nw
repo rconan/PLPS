@@ -1,0 +1,726 @@
+% -*- mode: Noweb; noweb-code-mode: c-mode -*-
+\documentclass[a4paper]{article}
+
+\usepackage{noweb,amsmath}
+\usepackage[pdftex,bookmarks,colorlinks,linkcolor=blue,citecolor=blue]{hyperref}
+\usepackage{graphicx}
+
+\def\bk{\bar \kappa_i}
+\def\dk{\Delta \kappa_i}
+\def\dphi{\Delta \varphi}
+\def\nk{N_\kappa}
+\def\na{N_\varphi}
+
+\pagestyle{noweb}
+
+\begin{document}
+
+\title{A CUDA kernel to compute turbulence phase screen}
+\author{R. Conan\\%
+  \small RSAA, The Australian National University, Weston Creek, ACT 2611, Australia}
+\maketitle
+
+\tableofcontents
+
+% \bibliographystyle{plain}
+% \bibliography{/home/rconan/Dropbox/rconan/Desktop/Info/Biblio/wholebib}
+\begin{thebibliography}{1}
+
+\bibitem{BG13}
+William~P. Burckel and Ryan~N. Gray.
+\newblock Turbulence phase screens based on polar-logarithmic spectral
+  sampling.
+\newblock {\em Appl. Opt.}, 52(19), Jul 2013.
+
+\bibitem{oomao}
+\newblock Object--Oriented Matlab Adaptive Optics.
+\newblock \url{http://github.com/rconan/OOMAO}
+
+\bibitem{noweb}
+Norman Ramsey.
+\newblock Literate programming simplified.
+\newblock IEEE Software, 11(5):97-105, September 1994. 
+\newblock \url{http://www.cs.tufts.edu/~nr/noweb/}
+
+\end{thebibliography}
+
+\newpage
+\section{Introduction}
+
+This note describe a CUDA implementation of the polar--logarithmic method~\cite{BG13} to generate turbulence phase screens.
+The source code and documentation are generated from a single file [[polarLogPhaseScreen.nw]] using the literate programming parser [[noweb]]~\cite{noweb}.
+The source code for the CUDA kernel and the Matlab test script is generated with 
+<<source code>>=
+noweb polarLogPhaseScreen.nw
+@ This command created 2 files: [[plps.cu]] and [[plps.m]].
+  In order to run the Matlab test script [[plps.m]], the CUDA kernel is first compiled with
+<<source code>>=
+nvcc -ptx plps.cu
+@ The PDF documentation is generated with
+<<documentation>>=
+noweave -delay -x polarLogPhaseScreen.nw > polarLogPhaseScreen.tex
+pdflatex polarLogPhaseScreen.tex
+pdflatex polarLogPhaseScreen.tex
+@ 
+\section{The phase screen}
+
+The phase screen equation is 
+\begin{eqnarray}
+  \label{eq:1}
+  \phi(x,y) &=& 1.4 r_0^{-{5\over6}}\sum_{i=1}^{N_\kappa}\sum_{j=1}^{N_\varphi} \Gamma\left( \bk\right) \\
+&& \times \left\{ \zeta_1(i,j) cos\left[ \eta_1(i,j) + \bk \left( x\cos \phi_j + y\sin \phi_j \right) \right] \right. \nonumber\\
+&& \quad + \left. \zeta_2(i,j) cos\left[ \eta_2(i,j) - \bk \left( x\sin \phi_j - y\cos \phi_j \right) \right] \right\} \nonumber
+\end{eqnarray}
+where 
+\begin{equation}
+  \label{eq:2}
+  \Gamma\left( \bk\right) = \left[ \Lambda(\bk) \bk \dk \dphi \right]^{1\over2}
+\end{equation}
+$\Lambda\left( \bk\right)$ is the spectrum kernel at the spatial frequency $\bk$, given by
+\begin{equation}
+  \label{eq:3}
+  \Lambda\left( \bk\right) = \left( \bk^2 + \kappa_0^2 \right)^{-{11\over6}}
+\end{equation}
+with $\kappa_0=2\pi/\mathcal L_0$, where $\mathcal L_0$ is the outer scale.
+
+Eq.~(\ref{eq:1}) is defined over a frequency range f, $$f={\kappa_{max}\over \kappa_{min}}$$ and for a frequency resolution $\delta$, $$\delta={\dk\over\bk}.$$
+$\bk$ and $\varphi_j$ are the magnitude and angle of the spatial frequency vector.
+$\bk$ is the average spatial frequency over a given interval $i$ and is written
+\begin{equation}
+  \label{eq:4}
+  \bk = {\kappa_{min}\over 2}f^{i\over\nk}\left( 1 + f^{-{1\over\nk}} \right).
+\end{equation}
+The interval width is given by
+\begin{equation}
+  \label{eq:5}
+  \dk = \kappa_{min}f^{i\over\nk}\left( 1 - f^{-{1\over\nk}} \right).
+\end{equation}
+$\varphi_j$ is derived from
+\begin{equation}
+  \label{eq:6}
+  \varphi_j = \left( j -{1\over2} \right) \Delta\varphi
+\end{equation}
+with $\Delta\varphi=\delta$.
+
+The number of frequency and angle samples are given by
+\begin{equation}
+  \label{eq:7}
+  \nk = { \ln f \over \ln \left( 2+\delta \over 2-\delta \right) }
+\end{equation}
+and
+\begin{equation}
+  \label{eq:8}
+  \na = {\pi\over4} \left( f^{1\over\nk}+1 \over f^{1\over\nk}-1 \right).
+\end{equation}
+
+The frequency range and resolution can also be derived from the $\nk$ and $\na$:
+\begin{equation}
+  \label{eq:9}
+  f = \left( 4\na + \pi \over 4\na - \pi \right)^{\nk}
+\end{equation}
+and
+\begin{equation}
+  \label{eq:10}
+  \delta = {\pi\over2\na}.
+\end{equation}
+
+$\zeta$ and $\eta$ are variates defined by
+\begin{equation}
+  \label{eq:11}
+  \zeta = \left( -\ln\beta_1 \right)^{1\over2}
+\end{equation}
+and
+\begin{equation}
+  \label{eq:12}
+  \eta = 2\pi\beta_2,
+\end{equation}
+where $\beta_1$ and $\beta_2$ are uniformly distributed variates.
+
+\newpage
+\section{The kernel}
+\label{sec:kernel}
+
+The CUDA kernel is written as
+<<plps.cu>>=
+#include <cuda.h>
+#include <cuda_runtime.h>
+#define PI 3.141592653589793
+__global__ void plps(float *phase_screen, float *x, float*y, int N_xy, 
+		       float N_k, float N_a, float f, float delta,
+		       float L0, float r0, float kmin,
+		       float const *zeta1, float const *eta1,
+		       float const *zeta2, float const *eta2)
+{
+  <<declarations>>
+
+  <<thread to coordinate index>>
+  
+  sum = 0;
+  
+  if (kl<N_xy)
+    {
+
+      <<variables>>
+
+      for (i=0;i<N_k;i++)
+	{
+	  <<frequency magnitude sum>>
+          for (j=0;j<N_a;j++)
+	    {
+	      <<frequency angle sum>>
+	    }
+	}
+      phase_screen[kl] = 1.4*powf(r0,-5.0/6.0)*sum;
+    }
+}
+@ 
+The kernel starts with some declarations:
+<<declarations>>=
+int i, j, ij, kl;
+float freq_mag0, delta_freq_mag0, f_red0, f_red, 
+  freq_L0_square, x_kl, y_kl,
+  freq_mag, delta_freq_mag, sqrt_spectrum_kernel,
+  freq_ang, cos_freq_ang, sin_freq_ang, sum;
+@ 
+Each thread is computing one value of the phase screen at the coordinate [[x_kl = x[kl]]] and [[y_kl = y[kl]]]
+<<thread to coordinate index>>=
+i = blockIdx.x * blockDim.x + threadIdx.x;
+j = blockIdx.y * blockDim.y + threadIdx.y;
+kl = j * gridDim.x * blockDim.x + i;
+x_kl = x[kl];
+y_kl = y[kl];
+@ 
+Next a few new variables are defined, $$[[f_red0]]=f^{1/N_k},$$, $$[[freq_mag0]]=\kappa_{min}{[[f_red0]]+1)\over 2[[f_red0]]},$$ $$[[delta_freq_mag0]]=\kappa_{min}{[[f_red0]]-1)\over [[f_red0]]},$$ $$[[freq_L0_square]]=\left(2\pi\over\mathcal L_0\right)^2.$$
+<<variables>>=
+f_red0 = powf(f,1/N_k);
+freq_mag0 = 0.5*kmin*( f_red0 + 1 )/f_red0;
+delta_freq_mag0 = kmin*( f_red0 - 1 )/f_red0;
+f_red  = 1;
+freq_L0_square = 2*PI/L0;
+freq_L0_square *= freq_L0_square;
+@ 
+The outer loop is the sum over the frequency magnitude. It computes $\bk$, $\dk$ and $\Gamma\left( \bk\right)$:
+<<frequency magnitude sum>>=
+f_red *= f_red0;
+freq_mag = freq_mag0*f_red;
+delta_freq_mag = delta_freq_mag0*f_red;
+sqrt_spectrum_kernel =
+  powf( freq_mag*freq_mag + freq_L0_square, -11.0/12.0)*
+  sqrt(freq_mag*delta_freq_mag*delta);
+@ 
+The inner loop is the sum over the frequency angle. It computes $\varphi_j$, $\sin(\varphi_j)$ and $\cos(\varphi_j)$.
+<<frequency angle sum>>=
+ freq_ang = (j+0.5)*delta;
+ sincosf(freq_ang, &sin_freq_ang, &cos_freq_ang);
+ ij = i*N_a + j;
+ sum += sqrt_spectrum_kernel*
+   ( zeta1[ij]*cosf( eta1[ij] +
+		     freq_mag*( x_kl*cos_freq_ang + y_kl*sin_freq_ang ) ) +
+     zeta2[ij]*cosf( eta2[ij] -
+		     freq_mag*( x_kl*sin_freq_ang - y_kl*cos_freq_ang ) ));
+@ 
+
+\section{Tests}
+\label{sec:tests}
+
+A test suite has been written to check that the phase screens have the expected statistics.
+The test suite is written using the Matlab language and requires the OOMAO~\cite{oomao}.
+<<plps.m>>=
+%% Test Suite for the polar-logarithmic phase screen generation method
+
+<<initialization>>
+
+<<variance test>>
+
+<<structure function test I>>
+
+<<structure function test II>>
+
+<<Zernike test>>
+
+<<Taylor (frozen flow) hypothesis test>>
+@ 
+
+\subsection{Initialization}
+\label{sec:initialization}
+
+The phase screens variables are defines and the random variates are drawn.
+A first phase screen is generated and plotted (Fig.~\ref{fig:phase_screens}) against a phase screen generated with the Fourier--sub--harmonic method.
+
+<<initialization>>=
+fprintf('__ Test Suite for the polar-logarithmic phase screen __\n')
+l0 = single( 1e-3 );
+L  = single( 1e2 );
+L0 = single( 30 ); 
+f = max(L,3*L0)/l0;
+delta0 = 10/100;
+kmin = 2*pi/max(L,3*L0);
+
+N_k = log(f)/log( (2+delta0)/(2-delta0) );
+N_a = 0.25*pi*( (f^(1/N_k) + 1)/(f^(1/N_k) - 1) );
+
+N_k = ceil(N_k);
+N_a = ceil(N_a);
+
+f = single( ( (4*N_a + pi)/(4*N_a - pi) )^N_k );
+delta = single( 0.5*pi/N_a );
+
+fprintf(' . N_k = %d\n',N_k)
+fprintf(' . N_a = %d\n',N_a)
+fprintf(' . frequency range = %8.2f\n',f)
+fprintf(' . frequency resolution = %6.4f\n',delta)
+
+r0 = 10e-2;
+atm = atmosphere(photometry.V,r0,L0);
+%%
+gpuKern = parallel.gpu.CUDAKernel('plps.ptx','plps.cu','plps');
+nxy = 501;
+gpuKern.ThreadBlockSize = ones(1,2)*16;
+gpuKern.GridSize = ones(1,2)*ceil(nxy/16);
+u = L0*single(gpuArray.linspace(-1,1,nxy));
+[x,y] = meshgrid(u);
+phs = gpuArray.zeros(nxy,'single');
+N_k = single( N_k );
+N_a = single( N_a );
+
+%%
+zeta1 = sqrt( -log(gpuArray.rand(N_k,N_a,'single') ) );
+eta1  = 2*pi*gpuArray.rand(N_k,N_a,'single');
+zeta2 = sqrt( -log(gpuArray.rand(N_k,N_a,'single') ) );
+eta2  = 2*pi*gpuArray.rand(N_k,N_a,'single');
+
+tic
+phs = feval(gpuKern,phs,x,y,nxy^2,N_k,N_a,f,delta,L0,r0,kmin,zeta1,eta1,zeta2,eta2);
+toc
+%%
+figure(22)
+subplot(1,2,1)
+imagesc(u,u,phs)
+axis square
+colorbar
+subplot(1,2,2)
+imagesc(u,u,fourierSubHarmonicPhaseScreen(atm,gather(u(end)-u(1)),nxy))
+axis square
+colorbar
+@ 
+\begin{figure}
+  \centering
+  \includegraphics[trim=1cm 3cm 1cm 3cm,clip,width=\linewidth]{plps_phase_screens}
+  \caption{Phase screens generated with the polar--logarithmic method on the right and with Fourier--sub--harmonic method on the left; x and y axis units are meters and the color bar unit is radian.}
+  \label{fig:phase_screens}
+\end{figure}
+@
+
+\subsection{Variance test}
+\label{sec:variance-test}
+
+For this test, 5000 random draws of turbulence phase are computed.
+The variance of the turbulence phase is computed and compared to the theoretical variance of the phase for the Von Karman model.
+Both variance agrees within 10\%.
+
+<<variance test>>=
+%% Variance test
+fprintf('__ Variance Test __\n')
+tic
+nxy = 1;
+gpuKern.ThreadBlockSize = ones(1,2)*16;
+gpuKern.GridSize = 1;
+x   = rand(1,5e3,'single');
+y   = rand(1,5e3,'single');
+x = (2*x-1)*L/2;
+y = (2*y-1)*L/2;
+phs = gpuArray.zeros(1,'single');
+fun = @(x_,y_)  gather(...
+    feval(gpuKern,phs,x_,y_,nxy,N_k,N_a,f,delta,L0,r0,kmin,...
+    sqrt( -log(gpuArray.rand(N_k,N_a,'single') ) ),...
+    2*pi*gpuArray.rand(N_k,N_a,'single'),...
+    sqrt( -log(gpuArray.rand(N_k,N_a,'single') ) ),...
+    2*pi*gpuArray.rand(N_k,N_a,'single')) );
+phs_var =  arrayfun( fun , x,y);
+fprintf(' . Theoretical variance: %8.2frd^2\n',phaseStats.variance(atm))
+fprintf(' . Numerical variance:   %8.2frd^2\n',var(phs_var))
+fprintf(' . Variance ratio: %6.5f\n',var(phs_var)/phaseStats.variance(atm))
+toc
+@ 
+
+\subsection{Structure function test I}
+\label{sec:struct-funct-test}
+
+The structure function of the turbulence phase is computed for $\mathcal L_0=30$m and compared to the theoretical structure function (Fig.~\ref{fig:structure_function_I}).
+
+<<structure function test I>>=
+%% Structure function test I
+fprintf('__ Structure Function Test I __\n')
+n_sample = 1000;
+rho = 0:0.25:5;
+rho(1) = 0.1;
+nRho = length(rho);
+mean_sf = zeros(1,nRho);
+std_sf = zeros(1,nRho);
+hwb = waitbar(0,'Computing SF ...');
+for kRho=1:nRho
+    
+    phi = gpuArray.rand(1,n_sample,'single')*2*pi;
+    zRho = rho(kRho).*exp(1i*phi);
+    zxy = (gpuArray.rand(1,n_sample,'single')*2-1)*0.5*L0 + ...
+        1i*(gpuArray.rand(1,n_sample,'single')*2-1)*0.5*L0;
+    zxy_rho = zxy + zRho;
+    
+    nxy = numel(zxy);
+    gpuKern.ThreadBlockSize = ones(1,2)*16;
+    gpuKern.GridSize = ones(1,2)*ceil(sqrt(nxy)/16);
+    phs_xy = gpuArray.zeros(size(zxy),'single');
+    phs_xy_rho = gpuArray.zeros(size(zxy_rho),'single');
+    
+    n_plps = 1000;
+    d_phs = gpuArray.zeros(n_plps,n_sample,'single');
+    tic
+    for k_plps = 1:n_plps
+        
+        zeta1 = sqrt( -log(gpuArray.rand(N_k,N_a,'single') ) );
+        eta1  = 2*pi*gpuArray.rand(N_k,N_a,'single');
+        zeta2 = sqrt( -log(gpuArray.rand(N_k,N_a,'single') ) );
+        eta2  = 2*pi*gpuArray.rand(N_k,N_a,'single');
+        
+        phs_xy =  feval(gpuKern,phs_xy,...
+            real(zxy),imag(zxy),nxy,N_k,N_a,f,delta,L0,r0,kmin,zeta1,eta1,zeta2,eta2);
+        phs_xy_rho =  feval(gpuKern,phs_xy_rho,...
+            real(zxy_rho),imag(zxy_rho),nxy,N_k,N_a,f,delta,L0,r0,kmin,zeta1,eta1,zeta2,eta2);
+        d_phs(k_plps,:) = phs_xy - phs_xy_rho;
+        
+    end
+    toc
+    
+    sf = var(d_phs);
+    mean_sf(kRho) =  gather( mean(sf) );
+    std_sf(kRho)  = gather( std(sf) );
+    
+    waitbar(kRho/nRho)
+    
+end
+close(hwb)
+
+figure(25)
+heb = errorbar(rho,mean_sf, std_sf);
+set(heb','Marker','o','MarkerSize',8,...
+    'MarkerFaceColor','r','MarkerEdgeColor','k',...
+    'Linewidth',2,'LineStyle','none')
+hold all
+plot(rho,phaseStats.structureFunction(rho,atm),'Linewidth',2)
+hold off
+grid
+xlabel('Separation [m]')
+ylabel('Structure function [rd^2]')
+@ 
+\begin{figure}
+  \centering
+  \includegraphics[width=\linewidth]{plps_structure_function_I}
+  \caption{Comparison of the numerical structure function (dots) with the theoretical structure function (solid line) for $\mathcal L_0=30$m.}
+  \label{fig:structure_function_I}
+\end{figure}
+@
+
+\subsection{Structure function test II}
+\label{sec:struct-funct-test-1}
+
+The structure function of the turbulence phase is computed for different $\mathcal L_0$ and compared to the theoretical structure function (Fig.~\ref{fig:structure_function_II}).
+
+<<structure function test II>>=
+%% Structure function test II
+fprintf('__ Structure Function Test II __\n')
+L0_ = [1 5 25 300]; 
+nL0 = length(L0_);
+
+n_sample = 1000;
+n_plps = 1000;
+
+nxy = n_sample;
+gpuKern.ThreadBlockSize = ones(1,2)*16;
+gpuKern.GridSize = ones(1,2)*ceil(sqrt(nxy)/16);
+phs_xy = gpuArray.zeros(1,nxy,'single');
+phs_xy_rho = gpuArray.zeros(1,nxy,'single');
+
+d_phs = gpuArray.zeros(n_plps,n_sample,'single');
+
+rho = logspace(-2,2,10)';
+nRho = length(rho);
+mean_sf = zeros(nRho,nL0);
+std_sf = zeros(nRho,nL0);
+th_sf = zeros(nRho,nL0);
+
+for kL0 = 1:nL0
+    
+    L0 = L0_(kL0);
+    atm = atmosphere(photometry.V,r0,L0);
+    
+    f = max(L,3*L0)/l0;
+    kmin = 2*pi/max(L,3*L0);
+    
+    N_k = log(f)/log( (2+delta0)/(2-delta0) );
+    N_a = 0.25*pi*( (f^(1/N_k) + 1)/(f^(1/N_k) - 1) );
+    
+    N_k = ceil(N_k);
+    N_a = ceil(N_a);
+    
+    f = single( ( (4*N_a + pi)/(4*N_a - pi) )^N_k );
+    delta = single( 0.5*pi/N_a );
+
+    hwb = waitbar(0,sprintf('Computing SF for L0=%3.0fm ...',L0));
+    for kRho=1:nRho
+        
+        phi = gpuArray.rand(1,n_sample,'single')*2*pi;
+        zRho = rho(kRho).*exp(1i*phi);
+        zxy = (gpuArray.rand(1,n_sample,'single')*2-1)*0.5*L0 + ...
+            1i*(gpuArray.rand(1,n_sample,'single')*2-1)*0.5*L0;
+        zxy_rho = zxy + zRho;
+        
+        tic
+        for k_plps = 1:n_plps
+            
+            zeta1 = sqrt( -log(gpuArray.rand(N_k,N_a,'single') ) );
+            eta1  = 2*pi*gpuArray.rand(N_k,N_a,'single');
+            zeta2 = sqrt( -log(gpuArray.rand(N_k,N_a,'single') ) );
+            eta2  = 2*pi*gpuArray.rand(N_k,N_a,'single');
+            
+            phs_xy =  feval(gpuKern,phs_xy,...
+                real(zxy),imag(zxy),nxy,N_k,N_a,f,delta,L0,r0,kmin,zeta1,eta1,zeta2,eta2);
+            phs_xy_rho =  feval(gpuKern,phs_xy_rho,...
+                real(zxy_rho),imag(zxy_rho),nxy,N_k,N_a,f,delta,L0,r0,kmin,zeta1,eta1,zeta2,eta2);
+            d_phs(k_plps,:) = phs_xy - phs_xy_rho;
+            
+        end
+        toc
+        
+        sf = var(d_phs);
+        mean_sf(kRho,kL0) =  gather( mean(sf) );
+        std_sf(kRho,kL0)  = gather( std(sf) );
+        
+        waitbar(kRho/nRho)
+        
+    end
+    close(hwb)
+    
+    th_sf(:,kL0) = phaseStats.structureFunction(rho,atm);
+    
+    figure(26)
+    heb = errorbar(repmat(rho,1,kL0),mean_sf(:,1:kL0), std_sf(:,1:kL0));
+    set(heb','Marker','o','MarkerSize',8,...
+        'MarkerFaceColor','r','MarkerEdgeColor','k',...
+        'Linewidth',2,'LineStyle','none','color','b')
+    hold all
+    plot(rho,th_sf(:,1:kL0),'color','k','Linewidth',2)
+    hold off
+    grid
+    xlabel('Separation [m]')
+    ylabel('Structure function [rd^2]')
+    set(gca,'xscale','log','yscale','log')  
+    drawnow
+end
+for kL0=1:nL0
+    text(rho(end),mean_sf(end,kL0)*.7,sprintf('L0=%3.0fm',L0_(kL0)),...
+        'VerticalAlignment','top','BackgroundColor','w')
+end
+@ 
+\begin{figure}
+  \centering
+  \includegraphics[width=\linewidth]{plps_structure_function_II}
+  \caption{Comparison of the numerical structure function (dots) with the theoretical structure function (solid line) for different $\mathcal L_0$m.}
+  \label{fig:structure_function_II}
+\end{figure}
+@
+
+\subsection{Zernike test}
+\label{sec:zernike-test}
+
+4000 uncorrelated phase screens are computed and they are projected onto the first 66 Zernike polynomials.
+The variance of the resulting coefficients is computed are compared against the theoretical variance of the Zernike coefficients (Fig.~\ref{fig:zernike}).
+
+<<Zernike test>>=
+%% Zernike test
+fprintf('__ Zernike Test __\n')
+L  = single( 1e2 );
+L0 = single( 30 ); 
+f = max(L,3*L0)/l0;
+kmin = 2*pi/max(L,3*L0);
+
+N_k = log(f)/log( (2+delta0)/(2-delta0) );
+N_a = 0.25*pi*( (f^(1/N_k) + 1)/(f^(1/N_k) - 1) );
+
+N_k = ceil(N_k);
+N_a = ceil(N_a);
+
+f = single( ( (4*N_a + pi)/(4*N_a - pi) )^N_k );
+delta = single( 0.5*pi/N_a );
+
+fprintf(' . N_k = %d\n',N_k)
+fprintf(' . N_a = %d\n',N_a)
+fprintf(' . frequency range = %8.2f\n',f)
+fprintf(' . frequency resolution = %6.4f\n',delta)
+
+nxy = 128;
+gpuKern.ThreadBlockSize = ones(1,2)*16;
+gpuKern.GridSize = ones(1,2)*ceil(nxy/16);
+u = 12.5*single(gpuArray.linspace(-1,1,nxy));
+[x,y] = meshgrid(u);
+phs = gpuArray.zeros(nxy,'single');
+N_k = single( N_k );
+N_a = single( N_a );
+
+nIt = 4000;
+
+atm = atmosphere(photometry.V,r0,L0,...
+    'windSpeed',10,'windDirection',0);
+
+zern = zernike(1:66,25,'resolution',nxy);
+zernCoefs = zeros(zern.nMode,nIt);
+h = waitbar(0,'Zernike Test !');
+for kTau=1:nIt
+    
+    zeta1 = sqrt( -log(gpuArray.rand(N_k,N_a,'single') ) );
+    eta1  = 2*pi*gpuArray.rand(N_k,N_a,'single');
+    zeta2 = sqrt( -log(gpuArray.rand(N_k,N_a,'single') ) );
+    eta2  = 2*pi*gpuArray.rand(N_k,N_a,'single');
+    
+    phs = feval(gpuKern,phs,x,y,nxy^2,N_k,N_a,f,delta,L0,r0,kmin,zeta1,eta1,zeta2,eta2);
+    h_phs = gather(phs);
+    zern = zern.\h_phs;
+    zernCoefs(:,kTau) = zern.c;
+    waitbar(kTau/nIt,h)
+end
+close(h)
+figure(29)
+h = semilogy(zern.j,var(zernCoefs,0,2),'ko',...
+    zern.j,zernikeStats.variance(zern,atm),'.-');
+set(h(1),'MarkerFaceColor','r')
+grid
+xlabel('Zernike mode')
+ylabel('Zernike coef. variance [rd^2]')
+@
+\begin{figure}
+  \centering
+  \includegraphics[width=\linewidth]{plps_zernike}
+  \caption{Comparison of the numerical Zernike spectrun (dots) with the theoretical Zernike spectrum (solid line) for different $\mathcal L_0$m.}
+  \label{fig:zernike}
+\end{figure}
+@
+
+\subsection{Taylor (frozen flow) hypothesis test}
+\label{sec:taylor-frozen-flow}
+
+Temporal series of Zernike coefficients are computed from 1000 uncorrelated phase screens.
+The temporal series last 5s and the sampling rate is 10Hz.
+From the temporal series, the temporal correlation of the Zernike coefficients are computed and compared to their theoretical counterpart (Fig.~\ref{fig:taylor}).
+
+
+<<Taylor (frozen flow) hypothesis test>>=
+%% Taylor (frozen flow) hypothesis test
+fprintf('__ Taylor (frozen flow) Hypothesis Test __\n')
+L  = single( 1e2 );
+L0 = single( 30 ); 
+f = max(L,3*L0)/l0;
+kmin = 2*pi/max(L,3*L0);
+
+N_k = log(f)/log( (2+delta0)/(2-delta0) );
+N_a = 0.25*pi*( (f^(1/N_k) + 1)/(f^(1/N_k) - 1) );
+
+N_k = ceil(N_k);
+N_a = ceil(N_a);
+
+f = single( ( (4*N_a + pi)/(4*N_a - pi) )^N_k );
+delta = single( 0.5*pi/N_a );
+
+fprintf(' . N_k = %d\n',N_k)
+fprintf(' . N_a = %d\n',N_a)
+fprintf(' . frequency range = %8.2f\n',f)
+fprintf(' . frequency resolution = %6.4f\n',delta)
+
+nxy = 128;
+gpuKern.ThreadBlockSize = ones(1,2)*16;
+gpuKern.GridSize = ones(1,2)*ceil(nxy/16);
+u = 12.5*single(gpuArray.linspace(-1,1,nxy));
+[x,y] = meshgrid(u);
+phs = gpuArray.zeros(nxy,'single');
+N_k = single( N_k );
+N_a = single( N_a );
+
+tic
+phs = feval(gpuKern,phs,x,y,nxy^2,N_k,N_a,f,delta,L0,r0,kmin,zeta1,eta1,zeta2,eta2);
+toc
+
+figure(27)
+h = imagesc(u,u,phs);
+axis square
+colorbar
+
+nIt = 1000;
+tau = 1/10;
+duration = 5;
+nTau = duration/tau;
+wind = 10;%.*exp(1i*pi/3);
+% wind = 10.*exp(1i*sin(2*pi*(0:nIt-1)*tau*1));
+
+atm = atmosphere(photometry.V,r0,L0,...
+    'windSpeed',10,'windDirection',0);
+
+zern = zernike(1:22,25,'resolution',nxy);
+zernCoefs = zeros(zern.nMode,nTau,nIt);
+
+h = waitbar(0,'Taylor (frozen flow) hypothesis test!');
+for kIt=1:nIt
+    
+    zeta1 = sqrt( -log(gpuArray.rand(N_k,N_a,'single') ) );
+    eta1  = 2*pi*gpuArray.rand(N_k,N_a,'single');
+    zeta2 = sqrt( -log(gpuArray.rand(N_k,N_a,'single') ) );
+    eta2  = 2*pi*gpuArray.rand(N_k,N_a,'single');
+    
+    for kTau=1:nTau
+        x = x + real(wind)*tau;
+        y = y + imag(wind)*tau;
+        phs = feval(gpuKern,phs,x,y,nxy^2,N_k,N_a,f,delta,L0,r0,kmin,zeta1,eta1,zeta2,eta2);
+        h_phs = gather(phs);
+        zern = zern.\h_phs;
+        zernCoefs(:,kTau,kIt) = zern.c;
+        %     set(h,'Cdata',h_phs)
+        %     drawnow
+    end
+    
+    waitbar(kIt/nIt,h)
+    
+end
+close(h)
+%%
+tau_ = (0:nTau-1)*tau;
+ngs = source;
+zcov = zeros(zern.nMode,zern.nMode,nTau);
+if matlabpool('size')==0
+    matlabpool open
+end
+tic
+parfor kTau=1:nTau
+    zcov(:,:,kTau) = ...
+        zernikeStats.temporalAngularCovariance(zern,atm,tau_(kTau),ngs,ngs);
+end
+toc
+zcov_diag =cell2mat( ...
+    arrayfun( @(x) squeeze( zcov(x,x,:) ) , 1:22, 'UniformOutput', false) );
+figure(30)
+h_th = plot(tau_,zcov_diag(:,2:8),'LineWidth',2);
+grid
+xlabel('Time [s]')
+ylabel('Zernike coef. covariance [rd^2]')
+legend(num2str((2:8)'),0)
+hold off
+
+C = mean( bsxfun( @times , zernCoefs(:,1,:) , zernCoefs ) , 3);
+hold all
+h_num = plot(tau_,C(2:8,:)','.','MarkerSize',15);
+hold off
+@ 
+\begin{figure}
+  \centering
+  \includegraphics[width=\linewidth]{plps_taylor}
+  \caption{Comparison of the numerical Zernike temporal correlation (dots) with the theoretical temporal correlation  (solid line) for $\mathcal L_0=30$m.}
+  \label{fig:taylor}
+\end{figure}
+
+\end{document}
